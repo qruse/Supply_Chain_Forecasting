@@ -1,0 +1,23 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and Editor files
+.vscode/
+.idea/
+.DS_Store
+
+# Data and Artifacts (large files)
+data/
+artifacts/
+test_logs/
+tmps/
+
+# User excluded files
+codex.md

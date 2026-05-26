@@ -1,0 +1,293 @@
+{
+  "profile": "cost_effective_small",
+  "intent": "Keep experiments comparable across demand, inventory, and procurement lead-time tasks while staying light enough for a single RTX 3090 / modest CPU runs.",
+  "global_limits": {
+    "baseline_batch_size_cap": 32,
+    "tsfm_batch_size_cap": 16,
+    "seed": 42,
+    "device": "auto"
+  },
+  "datasets": {
+    "demand_dataco": {
+      "task": "product_demand_forecasting",
+      "series_id": "sku_id",
+      "time_col": "order_date",
+      "target": "demand_qty",
+      "train": "data/sku_daily_train.csv",
+      "val": "data/sku_daily_val.csv",
+      "test": "data/sku_daily_test.csv",
+      "lookback_days": 30,
+      "horizon_days": 7,
+      "series_count": 118,
+      "note": "Existing tensor windows are already built under data/sku_xy_30_7_*.npz."
+    },
+    "inventory_mendeley": {
+      "task": "inventory_level_forecasting",
+      "series_id": "Product No",
+      "time_col": "date",
+      "target": "qty_on_hand",
+      "auxiliary_target": "stockout_flag",
+      "train": "data/inventory/processed/inventory_daily_train.csv",
+      "val": "data/inventory/processed/inventory_daily_val.csv",
+      "test": "data/inventory/processed/inventory_daily_test.csv",
+      "lookback_days": 30,
+      "horizon_days": 7,
+      "series_count": 2326,
+      "note": "Large series count; prioritize pooled/global models and TSFM. Use sampled ARIMA only if needed."
+    },
+    "leadtime_bpi_daily": {
+      "task": "procurement_lead_time_forecasting",
+      "series_id": "overall",
+      "time_col": "po_created_date",
+      "target": "median_lead_time_days",
+      "secondary_target": "mean_lead_time_days",
+      "train": "data/leadtime/processed/bpi_procurement_leadtime_daily_train.csv",
+      "val": "data/leadtime/processed/bpi_procurement_leadtime_daily_val.csv",
+      "test": "data/leadtime/processed/bpi_procurement_leadtime_daily_test.csv",
+      "lookback_days": 30,
+      "horizon_days": 7,
+      "series_count": 1,
+      "note": "Only 360 daily observations; keep neural training very small or use TSFM zero-shot/fine-tuning cautiously."
+    },
+    "leadtime_bpi_daily_spend_area": {
+      "task": "procurement_lead_time_forecasting_multiseries",
+      "series_id": "case Spend area text",
+      "time_col": "po_created_date",
+      "target": "median_lead_time_days",
+      "secondary_target": "mean_lead_time_days",
+      "train": "data/leadtime/processed/bpi_procurement_leadtime_daily_spend_area_train.csv",
+      "val": "data/leadtime/processed/bpi_procurement_leadtime_daily_spend_area_val.csv",
+      "test": "data/leadtime/processed/bpi_procurement_leadtime_daily_spend_area_test.csv",
+      "lookback_days": 30,
+      "horizon_days": 7,
+      "series_count": null,
+      "note": "Use as a multi-series variant if the overall daily series is too short."
+    }
+  },
+  "models": {
+    "naive_last_value": {
+      "enabled": true,
+      "params": {
+        "strategy": "last_observation",
+        "seasonal_period": null
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley", "leadtime_bpi_daily", "leadtime_bpi_daily_spend_area"]
+    },
+    "seasonal_naive": {
+      "enabled": true,
+      "params": {
+        "daily_seasonal_period": 7,
+        "weekly_seasonal_period": 4
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley", "leadtime_bpi_daily"]
+    },
+    "arima": {
+      "enabled": true,
+      "params": {
+        "orders": [[1, 1, 1], [1, 1, 0], [0, 1, 1], [0, 1, 0]],
+        "transform": "log1p_nonnegative_clip",
+        "max_series_for_large_dataset": 200
+      },
+      "use_for": ["demand_dataco", "leadtime_bpi_daily"],
+      "note": "For inventory, run only on a representative sample because 2,326 series can be CPU-expensive."
+    },
+    "rnn": {
+      "enabled": true,
+      "params": {
+        "epochs": 12,
+        "batch_size": 32,
+        "learning_rate": 0.001,
+        "hidden_size": 48,
+        "num_layers": 1,
+        "dropout": 0.1,
+        "patience": 3,
+        "gradient_clip_norm": 1.0
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley"],
+      "note": "Cheap recurrent baseline; optional for short lead-time series."
+    },
+    "lstm": {
+      "enabled": true,
+      "params": {
+        "epochs": 12,
+        "batch_size": 32,
+        "learning_rate": 0.001,
+        "hidden_size": 48,
+        "num_layers": 1,
+        "dropout": 0.1,
+        "patience": 3,
+        "gradient_clip_norm": 1.0
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley"],
+      "note": "Main compact recurrent baseline."
+    },
+    "gru": {
+      "enabled": true,
+      "params": {
+        "epochs": 12,
+        "batch_size": 32,
+        "learning_rate": 0.001,
+        "hidden_size": 48,
+        "num_layers": 1,
+        "dropout": 0.1,
+        "patience": 3,
+        "gradient_clip_norm": 1.0
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley"],
+      "note": "Compact alternative to LSTM."
+    },
+    "tcn": {
+      "enabled": true,
+      "params": {
+        "epochs": 12,
+        "batch_size": 32,
+        "learning_rate": 0.001,
+        "hidden_size": 48,
+        "num_layers": 1,
+        "kernel_size": 3,
+        "dropout": 0.1,
+        "patience": 3,
+        "gradient_clip_norm": 1.0
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley"],
+      "note": "Compact temporal convolution baseline using causal dilated 1D convolutions."
+    },
+    "chronos1_zero_shot": {
+      "enabled": true,
+      "params": {
+        "model_id": "amazon/chronos-t5-small",
+        "context_length": 30,
+        "prediction_length": 7,
+        "batch_size": 16,
+        "device": "auto",
+        "input": "target_only"
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley", "leadtime_bpi_daily"]
+    },
+    "chronosbolt_zero_shot": {
+      "enabled": true,
+      "params": {
+        "model_id": "amazon/chronos-bolt-small",
+        "context_length": 30,
+        "prediction_length": 7,
+        "batch_size": 16,
+        "device": "auto",
+        "input": "target_only"
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley", "leadtime_bpi_daily"]
+    },
+    "chronos2_zero_shot": {
+      "enabled": true,
+      "params": {
+        "model_id": "amazon/chronos-2",
+        "context_length": 30,
+        "prediction_length": 7,
+        "batch_size": 16,
+        "device": "auto",
+        "input": "target_plus_covariates"
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley", "leadtime_bpi_daily"]
+    },
+    "chronos2_lora_finetune": {
+      "enabled": true,
+      "params": {
+        "model_id": "amazon/chronos-2",
+        "context_length": 30,
+        "prediction_length": 7,
+        "batch_size": 16,
+        "learning_rate": 0.00001,
+        "num_steps": {
+          "demand_dataco": 100,
+          "inventory_mendeley": 120,
+          "leadtime_bpi_daily": 40,
+          "leadtime_bpi_daily_spend_area": 60
+        },
+        "finetune_mode": "lora",
+        "device": "auto"
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley", "leadtime_bpi_daily", "leadtime_bpi_daily_spend_area"],
+      "note": "Keep steps low for first paper runs. Increase only after smoke tests show stable memory and validation improvement."
+    },
+    "granite_ttm_zero_shot": {
+      "enabled": true,
+      "params": {
+        "model_id": "ibm-granite/granite-timeseries-ttm-r2",
+        "context_length": 512,
+        "native_prediction_length": 96,
+        "reported_prediction_length": 7,
+        "batch_size": 16,
+        "device": "auto",
+        "input": "target_only"
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley"],
+      "note": "TTM needs a longer context than the 30-day recurrent baseline. Forecasts are sliced to the common 7-day horizon for metric comparability."
+    },
+    "granite_ttm_finetune": {
+      "enabled": true,
+      "params": {
+        "model_id": "ibm-granite/granite-timeseries-ttm-r2",
+        "context_length": 512,
+        "native_prediction_length": 96,
+        "reported_prediction_length": 7,
+        "batch_size": 16,
+        "learning_rate": 0.00001,
+        "num_steps": {
+          "demand_dataco": 100,
+          "inventory_mendeley": 120
+        },
+        "device": "auto"
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley"],
+      "note": "Cost-effective full fine-tuning path. BPI daily lead-time is too short for the 512-context TTM setup."
+    },
+    "timesfm25_zero_shot": {
+      "enabled": true,
+      "params": {
+        "model_id": "google/timesfm-2.5-200m-pytorch",
+        "context_length": 128,
+        "reported_prediction_length": 7,
+        "batch_size": 16,
+        "device": "auto",
+        "input": "target_only"
+      },
+      "use_for": ["demand_dataco", "inventory_mendeley", "leadtime_bpi_daily"],
+      "note": "Uses the official google-research/timesfm torch package for inference."
+    },
+    "timesfm25_finetune": {
+      "enabled": false,
+      "params": {
+        "model_id": "google/timesfm-2.5-200m-transformers",
+        "context_length": 128,
+        "native_prediction_length": 128,
+        "reported_prediction_length": 7,
+        "batch_size": 16,
+        "learning_rate": 0.00001,
+        "num_steps": {
+          "demand_dataco": 100
+        },
+        "train_mode": "head",
+        "device": "auto"
+      },
+      "use_for": ["demand_dataco"],
+      "note": "Requires a separate Transformers build exposing TimesFm2_5ModelForPrediction; disabled in this shared Chronos/TTM environment for dependency compatibility."
+    }
+  },
+  "recommended_first_runs": [
+    {
+      "task": "demand_dataco",
+      "command": "python training.py --model lstm --epochs 12 --batch-size 32 --hidden-size 48 --num-layers 1 --dropout 0.1 --patience 3 --device cuda"
+    },
+    {
+      "task": "demand_dataco_tsfm",
+      "command": "python foundation_experiments.py --model chronos2_ft --split val --batch-size 16 --num-steps 100 --finetune-mode lora --device cuda"
+    },
+    {
+      "task": "demand_dataco_granite_ttm",
+      "command": "python foundation_experiments.py --model ttm_ft --split val --batch-size 16 --num-steps 100 --device cuda"
+    },
+    {
+      "task": "demand_dataco_timesfm25",
+      "command": "python foundation_experiments.py --model timesfm --split val --batch-size 16 --device cuda"
+    }
+  ]
+}

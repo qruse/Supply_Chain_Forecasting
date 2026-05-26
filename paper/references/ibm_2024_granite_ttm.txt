@@ -1,5 +1,0 @@
-Reference:
-Ekambaram, V., Jiaming, L., Melnyk, I., & Kalagnanam, J. (2024). Tiny Time Mixers (TTMs): Fast pre-trained models for enhanced zero-shot forecasting of multivariate time series. arXiv preprint arXiv:2401.03955.
-
-Summary:
-IBM Research presents Tiny Time Mixers (TTMs) under the Granite time-series framework. TTMs are lightweight pre-trained models designed for multivariate time-series forecasting. By utilizing a patch-mixing architecture that connects temporal and channel features efficiently, TTMs achieve high-accuracy zero-shot and few-shot forecasting with significantly lower computational footprints and VRAM usage compared to larger T5-based architectures.

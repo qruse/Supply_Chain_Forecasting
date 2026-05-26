@@ -1,281 +1,170 @@
-﻿# TSFM 수요예측 워크플로우
+# Supply Chain Uncertainty Forecasting & TSFM Benchmark
 
-이 저장소는 DataCo Supply Chain 데이터셋을 SKU 단위 수요예측 데이터로 정리하고, 기준선 모델을 학습하고 평가하는 흐름을 담고 있습니다.
+이 저장소는 공급망 관리(SCM) 시스템의 핵심 불확실성인 **수요(Demand)**, **재고(Inventory)**, **리드타임(Lead-time)**을 예측하기 위해 기존의 정교한 통계/딥러닝 기준 모델들과 시계열 기초 모델(Time Series Foundation Models, TSFM)을 비교하고 벤치마킹하는 연구 및 개발 워크플로우를 담고 있습니다.
 
-## 1. 의존성 설치
+본인의 고유 시계열 데이터(CSV) 파일로도 즉시 학습하고 예측할 수 있도록 일반화된 범용 예측 스크립트(`run_custom_dataset.py`)를 함께 제공합니다.
 
+---
+
+## 1. WSL2 CUDA 및 로컬 가상환경 구축
+
+이 프로젝트는 GPU 가속(CUDA)을 활용한 딥러닝 학습 및 Foundation Model 추론을 지원합니다. WSL2(Windows Subsystem for Linux) 환경 및 리눅스 장비에서 GPU를 온전히 활용할 수 있도록 환경을 다음과 같이 설정합니다.
+
+### 1-1. WSL2 CUDA 라이브러리 경로 매핑 (필요시)
+WSL2에서 NVIDIA GPU 노드를 올바르게 바인딩하기 위해 시스템 라이브러리 경로 환경변수를 쉘 설정 파일(`~/.bashrc` 등)에 추가합니다.
 ```bash
-python -m pip install numpy pandas scikit-learn statsmodels
+export LD_LIBRARY_PATH=/usr/lib/wsl/lib:$LD_LIBRARY_PATH
 ```
 
-GPU 학습을 사용할 수 있는 환경이면 CUDA 빌드 PyTorch를 설치하세요.
+### 1-2. 가상환경 구성 및 패키지 설치
+Python 3.10 ~ 3.11 환경에서 가상환경을 생성하고 아래 의존성을 순서대로 설치합니다.
 
 ```bash
+# 가상환경 생성 및 활성화
+python3 -m venv .venv
+source .venv/bin/bin/activate  # 또는 source .venv/bin/activate
+
+# 1. 기본 시계열 분석 및 데이터 과학 패키지 설치
+python -m pip install numpy pandas scikit-learn statsmodels nbformat
+
+# 2. CUDA 지원 PyTorch 설치 (GPU가 없는 경우 cpu 인덱스 사용)
 python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
-```
 
-GPU가 없는 환경에서는 CPU 빌드를 설치해도 됩니다.
-
-```bash
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-```
-
-Chronos 계열 실험을 하려면 추가로 설치하세요.
-
-```bash
+# 3. Chronos 계열 및 PEFT (LoRA 파인튜닝용) 라이브러리 설치
 python -m pip install chronos-forecasting==2.2.2 peft
-```
 
-Granite TTM과 TimesFM 2.5 실험을 하려면 추가로 설치하세요.
-
-```bash
+# 4. IBM Granite TTM 및 Google TimesFM 2.5 설치
 python -m pip install granite-tsfm
 python -m pip install "timesfm[torch] @ git+https://github.com/google-research/timesfm.git"
 ```
 
-## 2. 원본 데이터 전처리
+---
 
-정제된 거래 테이블을 생성합니다.
+## 2. 사용자 커스텀 시계열 데이터(CSV)로 학습 및 예측하기
+
+공급망 벤치마크 모델뿐만 아니라, **사용자가 보유한 임의의 시계열 CSV 파일**에 대해서도 빠르게 예측을 수행할 수 있는 `run_custom_dataset.py` 유틸리티를 제공합니다.
+
+### 2-1. 지원 모델 목록
+* `arima`: 전통적인 자기회귀 이동평균 통계 모델
+* `lstm`: 딥러닝 기반의 대표적인 재귀 신경망(Recurrent Neural Network) 모델
+* `tcn`: 인과관계 딜레이트 합성곱(Causal Dilated 1D CNN) 신경망 모델
+* `chronosbolt`: Amazon의 제로샷(Zero-shot) 시계열 기초 모델 (최고 성능 수준)
+
+### 2-2. 실행 인자(Argument) 설명
+* `--csv-path`: 예측을 수행할 커스텀 CSV 파일의 경로 (필수)
+* `--date-col`: 시계열 타임스탬프가 포함된 날짜 열의 이름 (필수)
+* `--target-col`: 예측하고자 하는 수량 또는 수치 열의 이름 (필수)
+* `--series-col`: 데이터를 구분하는 고유 상품 ID 또는 계정 코드 열 이름 (다중 시계열일 경우 필수)
+* `--model`: 사용할 예측 모델 선택 (`arima`, `lstm`, `tcn`, `chronosbolt`)
+* `--lookback`: 과거 며칠 동안의 데이터를 입력으로 쓸 것인지 설정 (기본값: `30`일)
+* `--horizon`: 향후 며칠 앞의 수요를 예측할 것인지 설정 (기본값: `7`일)
+* `--epochs`: 딥러닝 모델 학습을 수행할 최대 에폭 (기본값: `10`)
+* `--device`: 학습을 수행할 장치 선택 (`auto`, `cpu`, `cuda`)
+
+### 2-3. 실행 예제
 
 ```bash
-python preprocessing.py
+# 1. 테스트용 모의 시계열 데이터셋 생성 (tmps/dummy_ts.csv 생성됨)
+python tmps/generate_dummy_data.py
+
+# 2. LSTM 모델을 사용하여 예측 테스트 (CPU 구동)
+python run_custom_dataset.py \
+  --csv-path tmps/dummy_ts.csv \
+  --date-col date \
+  --target-col demand \
+  --series-col item_id \
+  --model lstm \
+  --epochs 5 \
+  --device cpu
+
+# 3. Amazon Chronos-Bolt Foundation Model로 제로샷(Zero-shot) 예측 실행 (GPU 구동)
+python run_custom_dataset.py \
+  --csv-path tmps/dummy_ts.csv \
+  --date-col date \
+  --target-col demand \
+  --series-col item_id \
+  --model chronosbolt \
+  --device cuda
 ```
 
-이 단계에서 하는 일:
+### 2-4. 출력 산출물
+실행이 완료되면 테스트 세트에 대한 메트릭과 각 시계열 그룹별 예측값이 자동으로 저장됩니다.
+* 예측 결과 CSV: `artifacts/results/custom/<model>_predictions.csv`
+* 성능 평가지표 JSON (MAE, MSE, RMSE, R2): `artifacts/results/custom/<model>_metrics.json`
 
-- 불필요한 개인정보 컬럼 제거
-- `Customer Zipcode` 제거
-- 누수 가능성이 있는 배송 관련 컬럼 제거
-  - `shipping date (DateOrders)`
-  - `Days for shipping (real)`
-  - `Late_delivery_risk`
-  - `Delivery Status`
-- 정제 결과를 `data/df_cleaned.csv`로 저장
-- 이후 단계에서 사용할 일별 집계 파일도 함께 생성
+---
 
-## 3. SKU 단위 데이터 생성
+## 3. 내장 공급망 데이터 전처리 및 학습
 
-SKU별 일 단위 패널과 `30일 입력 -> 7일 예측` 학습 데이터를 생성합니다.
+이 저장소에 기본 탑재된 3대 공급망 도메인 데이터를 가공하고 실험을 전체 파이프라인으로 돌리는 가이드입니다.
 
+### 3-1. 원본 데이터 정제 및 SKU 패널 생성
 ```bash
+# DataCo 거래 데이터 정제 (PII 컬럼 제거 및 누수 차단)
+python preprocessing.py
+
+# 일별 SKU 단위 수요예측 텐서 파일(.npz) 생성
 python data_build.py
 ```
+* **생성 파일:** `data/df_cleaned.csv`, `data/sku_daily.csv` 및 `data/sku_xy_30_7_*.npz`
 
-생성되는 파일:
-
-- `data/sku_daily.csv`
-- `data/sku_daily_train.csv`
-- `data/sku_daily_val.csv`
-- `data/sku_daily_test.csv`
-- `data/sku_xy_30_7_train.npz`
-- `data/sku_xy_30_7_val.npz`
-- `data/sku_xy_30_7_test.npz`
-
-구성:
-
-- 단위: `SKU x day`
-- 입력 길이: 30일
-- 예측 구간: 7일
-- 분할 방식: 날짜 기준으로 연속 구간 분할, 대략 70/15/15
-- `X_num`: 일별 숫자형 시계열 입력
-- `X_static`: 문자열 범주를 one-hot 인코딩한 고정 입력
-
-## 4. 기준선 모델 학습
-
-기준선 모델을 학습합니다.
-
+### 3-2. 공급망 벤치마크 Baseline 모델 학습
 ```bash
-python training.py --model arima
 python training.py --dataset demand --model rnn
 python training.py --dataset inventory --model lstm
 python training.py --dataset leadtime --model tcn
 ```
-
-한 번에 모두 학습하려면:
-
+한 번에 세 데이터셋 전체 모델을 학습하려면 아래 명령을 실행합니다.
 ```bash
-python training.py --dataset all --model all
+python training.py --dataset all --model all --epochs 12
 ```
+* 모델 체크포인트는 `artifacts/checkpoints/<dataset>/<model_name>/` 아래에 자동 저장됩니다.
 
-학습 옵션:
-
-- `--dataset`: `demand`, `inventory`, `leadtime`, `all` 중 선택. 기본값 `demand`
-- `--epochs`: 기본값 `12`
-- `--batch-size`: 기본값 `32`, 더 크게 입력해도 `32`로 제한
-- `--device`: `auto`, `cpu`, `cuda` 중 선택. 기본값 `auto`이며 CUDA 사용 가능 시 GPU를 사용
-- `--lr`: 학습률, 기본값 `0.001`
-- `--hidden-size`: recurrent hidden size, 기본값 `48`
-- `--num-layers`: recurrent layer 수, 기본값 `1`
-- `--dropout`: dropout 비율, 기본값 `0.10`
-- `--patience`: early stopping patience, 기본값 `3`
-- `--seed`: 난수 시드
-
-예시:
-
-```bash
-python training.py --dataset demand --model lstm --epochs 12 --batch-size 32 --hidden-size 48 --num-layers 1 --dropout 0.1 --patience 3
-```
-
-학습 방식:
-
-- 매 epoch마다 validation을 적용
-- 매 epoch checkpoint 저장
-- 최고 성능 checkpoint는 `best_...` 이름으로 별도 저장
-- checkpoint는 `artifacts/checkpoints/<dataset>/<model_name>/` 아래에 저장
-- 기본적으로 학습 시작 시 해당 dataset/model의 오래된 epoch/best checkpoint와 history를 정리합니다. 이전 checkpoint를 보존하려면 `--keep-old-checkpoints` 또는 `KEEP_OLD_CHECKPOINTS=1`을 사용합니다.
-- `ARIMA`는 단변량 기준선으로 유지
-- `RNN`은 가장 기본적인 recurrent baseline
-- `TCN`은 causal dilated 1D convolution 기반 neural baseline
-- 문자열 one-hot을 외생변수로 쓰는 선형 시계열 모델을 만들고 싶다면, `VARIMA`보다 `ARIMAX` / `SARIMAX`가 더 맞는 표현
-
-## 5. 모든 checkpoint 테스트
-
-저장된 모든 epoch checkpoint와 best checkpoint를 test split에 대해 평가합니다.
-
+### 3-3. 모든 체크포인트 모델 평가
 ```bash
 python testing.py --dataset all --model all
 ```
+* 평가 결과 메트릭 및 전체 예측값 CSV는 `artifacts/results/baseline/` 경로 하위에 저장됩니다.
 
-이 명령은 결과를 출력하고 CSV 파일로도 저장합니다.
-
-baseline 결과는 `artifacts/results/baseline/<dataset>/<model_name>/` 아래에 저장됩니다.
-
-- `artifacts/results/baseline/demand/arima/arima_test_metrics.csv`
-- `artifacts/results/baseline/demand/rnn/rnn_test_metrics.csv`
-- `artifacts/results/baseline/inventory/lstm/lstm_test_metrics.csv`
-- `artifacts/results/baseline/leadtime/tcn/tcn_test_metrics.csv`
-- `artifacts/results/baseline/arima/arima_test_sku_metrics.csv`
-- `artifacts/results/baseline/rnn/rnn_test_sku_metrics.csv`
-- `artifacts/results/baseline/lstm/lstm_test_sku_metrics.csv`
-- `artifacts/results/baseline/gru/gru_test_sku_metrics.csv`
-- `artifacts/results/baseline/tcn/tcn_test_sku_metrics.csv`
-- `artifacts/results/baseline/arima/arima_test_sku_mae.csv`
-- `artifacts/results/baseline/rnn/rnn_test_sku_mae.csv`
-- `artifacts/results/baseline/lstm/lstm_test_sku_mae.csv`
-- `artifacts/results/baseline/gru/gru_test_sku_mae.csv`
-- `artifacts/results/baseline/tcn/tcn_test_sku_mae.csv`
-- `artifacts/results/baseline/arima/arima_test_forecasts.csv`
-
-test metric에는 `MAE`, `MSE`, `RMSE`, `MAPE`, `R2`가 들어갑니다.
-SKU/target별 metric CSV에도 `MAE`, `RMSE`, `MAPE`, `R2`가 저장됩니다. 실제값이 0인 관측치는 MAPE 계산에서 제외하고, 전부 0인 target은 `NaN`으로 둡니다.
-
-## 6. TSFM / Foundation Model 실험
-
-Chronos, Granite TTM, TimesFM 기반 TSFM 실험은 아래 스크립트로 돌립니다.
-
+### 3-4. TSFM / 시계열 기초 모델 실험
+Amazon Chronos, IBM Granite TTM, Google TimesFM의 제로샷 및 파인튜닝 실험 스크립트입니다.
 ```bash
 python foundation_experiments.py --dataset demand --model all --split both
 ```
-
-개별 모델만 돌리고 싶으면:
-
+개별 Foundation Model만 실행하고자 할 경우:
 ```bash
-python foundation_experiments.py --dataset demand --model chronos1 --split test
-python foundation_experiments.py --dataset inventory --model chronosbolt --split test
-python foundation_experiments.py --dataset leadtime --model chronos2 --split test
-python foundation_experiments.py --dataset demand --model chronos2_ft --split test --finetune-mode lora --num-steps 100
-python foundation_experiments.py --dataset demand --model ttm --split test
-python foundation_experiments.py --dataset demand --model ttm_ft --split test --num-steps 100
 python foundation_experiments.py --dataset inventory --model timesfm --split test
+python foundation_experiments.py --dataset demand --model chronos2_ft --split test --finetune-mode lora --num-steps 100
 ```
 
-TSFM/Chronos 실행의 `--dataset`은 `demand`, `inventory`, `leadtime`, `all`을 지원합니다. `--batch-size` 기본값은 `16`이고, 더 크게 입력해도 `16`으로 제한합니다. `--device auto`가 기본값이며 CUDA 사용 가능 시 GPU를 사용합니다.
-`--model all`은 세 데이터셋 공통 비교가 가능하도록 Chronos-1, Chronos-Bolt, Chronos-2, Chronos-2 LoRA fine-tuning, TimesFM 2.5 zero-shot을 실행합니다. Granite TTM/TTM fine-tuning은 공통 비교에서 제외했으며, 필요할 때만 `--model ttm` 또는 `--model ttm_ft`로 개별 실행합니다.
-`timesfm`은 공식 TimesFM 2.5 torch 패키지 기반 zero-shot 경로입니다. TimesFM 2.5 fine-tuning은 별도 Transformers 2.5 지원 환경이 필요해서 현재 공용 실행 경로에서는 비활성화해 둡니다.
-현재 저장소의 기본 실험 프리셋은 `configs/experiment_presets.json`에 정리되어 있으며, 리소스 절약을 위해 작은 모델 크기와 짧은 fine-tuning step을 우선 사용합니다.
+---
 
-출력 위치:
+## 4. 전체 파이프라인 원클릭 오케스트레이션
 
-- 예측 결과 CSV: `artifacts/results/chronos/<dataset>/<model_name>/`
-- fine-tuned Chronos-2 저장본: `artifacts/foundation_models/`
-- 모델별 메트릭: `artifacts/results/chronos/<dataset>/<model_name>/<model_name>_<split>_metrics.csv`
-- 모델별 SKU 메트릭: `artifacts/results/chronos/<dataset>/<model_name>/<model_name>_<split>_sku_metrics.csv`
-- 모델별 SKU MAE: `artifacts/results/chronos/<dataset>/<model_name>/<model_name>_<split>_sku_mae.csv`
-
-모델별 입력 방식:
-
-- `chronos1`: target만 사용
-- `chronosbolt`: target만 사용
-- `chronos2`: target + past/future covariates 사용
-- `chronos2_ft`: Chronos-2를 현재 데이터셋으로 fine-tuning
-- `ttm`: Granite TTM target-only zero-shot, 개별 실행용
-- `ttm_ft`: Granite TTM target-only fine-tuning, 개별 실행용
-- `timesfm`: TimesFM 2.5 target-only zero-shot
-
-주의:
-
-- Chronos-2는 문자열 범주를 one-hot으로 바꾸지 않고, covariate 타입에 맞춰 그대로 입력할 수 있습니다.
-- Chronos-1과 Chronos-Bolt는 target-only zero-shot으로 두는 편이 맞습니다.
-- zero-shot과 fine-tuning 결과는 서로 다른 모델 폴더와 CSV로 저장됩니다.
-- TSFM test metric에도 `MAE`, `MSE`, `RMSE`, `MAPE`, `R2`가 같이 저장됩니다.
-
-## 7. 코드 구성
-
-- `model.py`: 공통 모델 정의와 ARIMA helper
-- `forecasting_data.py`: `demand`, `inventory`, `leadtime` 데이터셋 정의와 공통 window 생성
-- `training.py`: ARIMA, RNN, LSTM, GRU, TCN 학습 및 checkpoint 저장
-- `testing.py`: 저장된 모든 checkpoint를 test set에서 평가
-- `foundation_experiments.py`: Chronos-1, Chronos-Bolt, Chronos-2 zero-shot 및 Chronos-2 fine-tuning
-
-## 8. 전체 파이프라인 스크립트
-
-데이터 처리부터 학습/검증까지 한 번에 실행하려면:
+데이터 정제부터 시계열 패널 구축, 품질 점검, 재귀 신경망(RNN/LSTM/GRU/TCN) 모델 학습, 그리고 기초 모델(TSFM) 검증까지 모든 파이프라인을 쉘 스크립트 단 한 번의 실행으로 완수할 수 있습니다.
 
 ```bash
+# 기본 실행 (CUDA 장치가 감지되면 우선 사용하여 전체 자동 수행)
 scripts/run_full_pipeline.sh
-```
 
-기본 실행 범위:
-
-- DataCo 수요 데이터 전처리 및 SKU 패널 생성
-- Inventory 데이터 생성
-- BPI lead-time 데이터 생성
-- 데이터 품질 점검
-- DataCo 수요예측 baseline 전체 학습: `ARIMA`, `RNN`, `LSTM`, `GRU`, `TCN`
-- Inventory baseline 전체 학습: `ARIMA`, `RNN`, `LSTM`, `GRU`, `TCN`
-- BPI lead-time baseline 전체 학습: `ARIMA`, `RNN`, `LSTM`, `GRU`, `TCN`
-- baseline test 평가
-- TSFM 실험: 기본 실행. `TSFM_DATASET=all` 기본값으로 demand, inventory, leadtime을 순회하며 공통 모델 세트를 실행합니다.
-  - zero-shot: `Chronos-1`, `Chronos-Bolt`, `Chronos-2`, `TimesFM 2.5`
-  - fine-tuning: `Chronos-2 LoRA`
-  - 개별 실행용: `Granite TTM`, `Granite TTM fine-tuning`
-  - 제외: `TimesFM 2.5 fine-tuning`은 현재 공용 의존성 환경에서 안정적인 기본 경로가 없어 제외
-
-주요 옵션은 환경변수로 조정합니다.
-
-```bash
+# 환경변수를 조절하여 특정 디바이스 및 에폭 지정 실행
 DEVICE=cuda BASELINE_EPOCHS=12 TSFM_STEPS=100 scripts/run_full_pipeline.sh
-RUN_TSFMS=1 TSFM_DATASET=inventory TSFM_MODEL=timesfm TSFM_SPLIT=val scripts/run_full_pipeline.sh
-RUN_DATA=0 RUN_BASELINES=1 RUN_TSFMS=0 scripts/run_full_pipeline.sh
-FORCE_REBUILD=1 scripts/run_full_pipeline.sh
-TSFM_DATASET=leadtime TSFM_MODEL=chronos2 TSFM_SPLIT=val scripts/steps/20_run_tsfm.sh
 ```
+* 실행 과정에서 발생하는 디버그 로그와 에러 트레이스는 `test_logs/` 디렉토리 하위에 상세히 누적 보관됩니다.
 
-데이터 준비 단계는 필수 산출물과 품질 리포트가 이미 있으면 자동으로 건너뜁니다. 다시 만들고 싶으면 `FORCE_REBUILD=1`을 붙입니다.
+---
 
-단계별 스크립트:
+## 5. 프로젝트 소스 코드 구조
 
-- `scripts/steps/01_prepare_demand_data.sh`
-- `scripts/steps/02_prepare_inventory_data.sh`
-- `scripts/steps/03_prepare_leadtime_data.sh`
-- `scripts/steps/04_validate_data_quality.sh`
-- `scripts/steps/10_train_baselines.sh`
-- `scripts/steps/11_test_baselines.sh`
-- `scripts/steps/20_run_tsfm.sh`
-
-모든 실행 로그는 `test_logs/` 아래에 저장됩니다.
-
-## 9. 현재 모델링 설정
-
-- 예측 대상: SKU별 일 수요
-- 입력 길이: 30일
-- 예측 길이: 다음 7일
-- 손실 함수: MSE
-- 숫자형 시계열 입력은 train split 통계로 표준화
-- 문자열 범주 입력은 one-hot 인코딩 후 RNN/LSTM/GRU/TCN의 static input으로 사용
-- categorical embedding은 아직 사용하지 않음
-
-## 10. 참고
-
-- `EDA.ipynb`에는 수요 집중도, 간헐수요, SKU별 zero-share 분석이 들어 있습니다.
-- 현재 파이프라인은 행 단위 예측이 아니라 계층형 SKU 수요예측에 맞춰져 있습니다.
+* `run_custom_dataset.py`: [NEW] 사용자의 CSV 파일로 시계열 학습/예측을 진행하는 유틸리티
+* `preprocessing.py`: DataCo 원본 거래 데이터의 PII 제거 및 노이즈 필터링
+* `data_build.py`: 트랜잭션 데이터를 시계열 SKU 패널로 변환하고 캘린더 피처 추가
+* `forecasting_data.py`: `demand`, `inventory`, `leadtime` 각 도메인 데이터셋 관리 레지스트리 및 윈도우 생성 클래스
+* `model.py`: ARIMA 래퍼 및 RNN/LSTM/GRU/TCN 딥러닝 아키텍처 모델 정의
+* `training.py`: 각 도메인 데이터셋별 딥러닝 Baseline 모델 지도 학습
+* `testing.py`: 도메인별 학습된 체크포인트 가중치 테스트셋 평가 및 성능 지표 산출
+* `foundation_experiments.py`: Chronos 계열, Granite TTM, TimesFM 기초 시계열 모델의 제로샷 추론 및 파인튜닝
+* `build_inventory_dataset.py`: Mendeley Retail 인벤토리 원본 데이터 정제 및 일별 재고 패널 변환
+* `build_leadtime_dataset.py`: BPI 2019 이벤트 로그로부터 구매주문(PO)-물품입고(GR) 리드타임 패널 데이터 생성
+* `configs/experiment_presets.json`: 학습 설정 변수 및 파라미터 최적화 프리셋 정의
+* `artifacts/dataset_notes/`: 각 공급망 시계열 벤치마크 데이터셋의 도메인 분석 리포트

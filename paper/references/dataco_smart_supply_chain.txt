@@ -1,0 +1,5 @@
+Dataset Reference:
+Constante, F., Silva, M., & Ortiz, A. (2018). DataCo Smart Supply Chain Dataset. Mendeley Data.
+
+Summary:
+The DataCo dataset contains transactional and operational data from a co-operative supply chain network. It captures 180,519 order transactions, including customer demographics, order dates, products, sales, profit margins, shipping modes, and actual vs. scheduled delivery times. For SCM forecasting research, the dataset is commonly used to model customer demand volatility (Order Item Quantity) and delivery performance at the SKU level.

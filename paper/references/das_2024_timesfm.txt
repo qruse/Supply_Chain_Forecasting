@@ -1,0 +1,5 @@
+Reference:
+Das, A., Kong, W., Leach, M., Sen, R., & Yu, N. (2024). A decoder-only foundation model for time-series forecasting. arXiv preprint arXiv:2410.10280.
+
+Summary:
+Google introduces TimesFM (Time-series Foundation Model), a decoder-only model trained on a massive corpus of 100 billion real and synthetic time-series data points. TimesFM utilizes a patch-based approach where input time series are split into non-overlapping patches, and a transformer head predicts future patches auto-regressively. TimesFM 2.5 demonstrates state-of-the-art zero-shot performance on various benchmarks, particularly in capturing multi-frequency SCM patterns and seasonal fluctuations.

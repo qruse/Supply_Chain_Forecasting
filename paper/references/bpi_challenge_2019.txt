@@ -1,0 +1,5 @@
+Dataset Reference:
+van Dongen, B. F. (2019). Business Process Intelligence Challenge 2019 (BPIC19). Eindhoven University of Technology. Dataset.
+
+Summary:
+The BPIC 2019 dataset is a real-world event log containing 251,734 purchase-to-pay process cases from a multinational electronics corporation. It documents purchase order item creation, goods receipt registration, invoice verification, and payment clearance events. In SCM research, it serves as a benchmark for procurement lead-time forecasting, specifically measuring the elapsed time between PO creation and goods receipt.

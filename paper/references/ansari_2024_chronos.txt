@@ -1,0 +1,5 @@
+Reference:
+Ansari, A., Stella, L., Kantor, C., Zhang, G., Heise, B., Zschiegner, A., ... & Bohlke-Schneider, M. (2024). Chronos: Learning the language of time series. arXiv preprint arXiv:2403.07815.
+
+Summary:
+This paper introduces Chronos, a framework for pretrained time series forecasting models. Chronos tokenizes time series values into bins and trains a decoder-only transformer architecture (similar to T5 or GPT) using cross-entropy loss, framing forecasting as a next-token prediction task. The authors demonstrate that Chronos models, when trained on a large collection of public and synthetic datasets, exhibit remarkable zero-shot generalization capabilities, outperforming traditional statistical and specialized deep learning models on unseen datasets.
